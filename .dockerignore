@@ -1,0 +1,17 @@
+.venv/
+.git/
+.gitignore
+.gradio/
+__pycache__/
+*.pyc
+.env
+.env.local
+*.pem
+*.key
+.DS_Store
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+.vs/
+.vscode/
