@@ -1,6 +1,9 @@
 #importing relevant libraries
+import os
 import gradio as gr
 import torch
+import uvicorn
+from fastapi import FastAPI
 from transformers import BlipProcessor, BlipForConditionalGeneration
 from PIL import Image
 import warnings
@@ -34,6 +37,9 @@ ifc = gr.Interface(fn=generate_caption,
                    title=" AI Image Captioning with BLIP",
                    description="Upload an image to generate a more detailed caption using the BLIP model.")   
 
+app = gr.mount_gradio_app(FastAPI(), ifc, path="/")
+
 #launching the interface
 if __name__ == "__main__":
-    ifc.launch(share=True)
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
