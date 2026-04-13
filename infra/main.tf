@@ -55,7 +55,7 @@ resource "azurerm_container_app" "app" {
   }
 
   template {
-    containers {
+    container {
       name   = var.app_name
       image  = "${azurerm_container_registry.acr.login_server}/${var.container_image}"
       cpu    = var.container_cpu
@@ -74,6 +74,16 @@ resource "azurerm_container_app" "app" {
       env {
         name  = "HF_HUB_DISABLE_PROGRESS_BARS"
         value = "1"
+      }
+
+      env {
+        name  = "MODEL_ID"
+        value = var.model_id
+      }
+
+      env {
+        name  = "FINETUNED_MODEL_PATH"
+        value = var.finetuned_model_path
       }
     }
 

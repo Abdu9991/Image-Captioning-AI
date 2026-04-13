@@ -8,7 +8,11 @@ registry_sku        = "Standard"
 
 # Container resource allocation
 container_cpu    = "1.5"
-container_memory = "3.0"
+container_memory = "1.5"
+
+# Model configuration
+model_id             = "Salesforce/blip-image-captioning-base"
+finetuned_model_path = ""
 
 # Autoscaling
 min_replicas = 1

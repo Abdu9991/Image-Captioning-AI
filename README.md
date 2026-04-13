@@ -12,18 +12,18 @@ This project provides:
 
 ## How It Works
 
-The app loads `Salesforce/blip-image-captioning-large` and performs:
+The app defaults to `Salesforce/blip-image-captioning-base` (lower memory) and can use a fine-tuned model checkpoint via environment variable. It performs:
 1. Image preprocessing with PIL.
 2. BLIP tokenization via `BlipProcessor`.
 3. Caption generation with beam search and length controls.
 4. Text decoding and display in the Gradio UI.
 
-Current generation configuration in `main.py`:
+Current default generation configuration in `main.py`:
 - Prompt: `"a detailed description of"`
-- `max_new_tokens=80`
-- `min_new_tokens=20`
-- `num_beams=5`
-- `repetition_penalty=1.2`
+- `max_new_tokens=48`
+- `min_new_tokens=10`
+- `num_beams=3`
+- `repetition_penalty=1.15`
 
 ## Tech Stack
 
@@ -84,11 +84,26 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 c:/Users/abdua/Desktop/AM/AI/Image-Captioning-AI/.venv/Scripts/python.exe main.py
 ```
 
+Use a fine-tuned checkpoint (local path or Hugging Face model ID):
+
+```powershell
+$env:FINETUNED_MODEL_PATH="your-org/your-finetuned-blip-model"
+c:/Users/abdua/Desktop/AM/AI/Image-Captioning-AI/.venv/Scripts/python.exe main.py
+```
+
+Optional memory-related tuning:
+
+```powershell
+$env:MODEL_ID="Salesforce/blip-image-captioning-base"
+$env:CAPTION_MAX_NEW_TOKENS="40"
+$env:CAPTION_NUM_BEAMS="2"
+```
+
 Then open:
 - `http://127.0.0.1:7860`
 
 Notes:
-- First run downloads the BLIP model (~1.88 GB), so startup can take time.
+- First run downloads the configured model/checkpoint, so startup can take time.
 - The app uses `share=True`, so Gradio may also generate a public share link.
 
 ## Docker
@@ -125,6 +140,8 @@ Edit `infra/terraform.tfvars`:
 - `app_name`
 - `registry_name` (must be globally unique, lowercase alphanumeric)
 - `container_cpu`, `container_memory`
+- `model_id` (defaults to `Salesforce/blip-image-captioning-base`)
+- `finetuned_model_path` (optional fine-tuned model path or model ID)
 - `min_replicas`, `max_replicas`
 
 ### Deploy

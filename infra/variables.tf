@@ -54,7 +54,19 @@ variable "container_cpu" {
 variable "container_memory" {
   description = "Memory allocation for container (GB)"
   type        = string
-  default     = "2.0"
+  default     = "1.5"
+}
+
+variable "model_id" {
+  description = "BLIP model ID for inference"
+  type        = string
+  default     = "Salesforce/blip-image-captioning-base"
+}
+
+variable "finetuned_model_path" {
+  description = "Optional fine-tuned model path or Hugging Face model ID"
+  type        = string
+  default     = ""
 }
 
 variable "min_replicas" {
