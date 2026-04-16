@@ -1,20 +1,20 @@
 # Image-Captioning-AI
 
-An AI-powered image captioning web app built with Gradio, PyTorch, and Salesforce BLIP. Upload an image and the app generates a detailed natural-language description.
+An AI-powered image captioning web app built with Gradio, PyTorch, and Hugging Face vision-language models including Salesforce BLIP and Qwen 2.5 VL. Upload an image and the app generates a detailed natural-language description.
 
 ## Project Overview
 
 This project provides:
 - A local web UI for image upload and caption generation.
-- BLIP-based captioning with tuned generation settings for richer output.
+- BLIP and Qwen 2.5 VL captioning with tuned generation settings for richer output.
 - Docker support for containerized execution.
 - Terraform infrastructure for Azure Container Apps deployment.
 
 ## How It Works
 
-The app defaults to `Salesforce/blip-image-captioning-base` (lower memory) and can use a fine-tuned model checkpoint via environment variable. It performs:
+The app defaults to `Salesforce/blip-image-captioning-base` (lower memory) and can switch to Qwen 2.5 VL or a fine-tuned checkpoint via environment variables. It performs:
 1. Image preprocessing with PIL.
-2. BLIP tokenization via `BlipProcessor`.
+2. Model-specific preprocessing via `BlipProcessor` or `AutoProcessor`.
 3. Caption generation with beam search and length controls.
 4. Text decoding and display in the Gradio UI.
 
@@ -90,6 +90,18 @@ Use a fine-tuned checkpoint (local path or Hugging Face model ID):
 $env:FINETUNED_MODEL_PATH="your-org/your-finetuned-blip-model"
 c:/Users/abdua/Desktop/AM/AI/Image-Captioning-AI/.venv/Scripts/python.exe main.py
 ```
+
+Use Qwen 2.5 VL:
+
+```powershell
+$env:MODEL_ID="Qwen/Qwen2.5-VL-3B-Instruct"
+c:/Users/abdua/Desktop/AM/AI/Image-Captioning-AI/.venv/Scripts/python.exe main.py
+```
+
+Notes for Qwen 2.5 VL:
+- It requires substantially more memory than the default BLIP model.
+- GPU is strongly preferred for acceptable startup and inference speed.
+- The first run downloads the full checkpoint from Hugging Face.
 
 Optional memory-related tuning:
 

@@ -1,13 +1,19 @@
 #importing relevant libraries
 import os
 import threading
+import warnings
+
 import gradio as gr
 import torch
 import uvicorn
 from fastapi import FastAPI
-from transformers import BlipProcessor, BlipForConditionalGeneration
 from PIL import Image
-import warnings
+from transformers import (
+    AutoProcessor,
+    BlipForConditionalGeneration,
+    BlipProcessor,
+    Qwen2_5_VLForConditionalGeneration,
+)
 
 warnings.filterwarnings("ignore")
 
@@ -42,6 +48,21 @@ model = None
 _model_lock = threading.Lock()
 
 
+def is_qwen_vl_model(model_source):
+    normalized = model_source.lower()
+    return "qwen2.5-vl" in normalized or "qwen-vl" in normalized
+
+
+IS_QWEN_VL = is_qwen_vl_model(MODEL_SOURCE)
+
+
+def move_inputs_to_device(inputs):
+    return {
+        key: value.to(DEVICE) if hasattr(value, "to") else value
+        for key, value in inputs.items()
+    }
+
+
 def get_model_components():
     global processor, model
     if processor is not None and model is not None:
@@ -52,29 +73,32 @@ def get_model_components():
             return processor, model
 
         # Loading from FINETUNED_MODEL_PATH lets you use a custom fine-tuned checkpoint.
-        processor = BlipProcessor.from_pretrained(MODEL_SOURCE)
-        model = BlipForConditionalGeneration.from_pretrained(
-            MODEL_SOURCE,
-            low_cpu_mem_usage=True,
-            torch_dtype=DTYPE,
-        )
+        if IS_QWEN_VL:
+            processor = AutoProcessor.from_pretrained(MODEL_SOURCE)
+            model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                MODEL_SOURCE,
+                torch_dtype=DTYPE,
+            )
+        else:
+            processor = BlipProcessor.from_pretrained(MODEL_SOURCE)
+            model = BlipForConditionalGeneration.from_pretrained(
+                MODEL_SOURCE,
+                low_cpu_mem_usage=True,
+                torch_dtype=DTYPE,
+            )
         model = model.to(DEVICE)
         model.eval()
 
     return processor, model
 
 
-#function to generate caption for the input image
-def generate_caption(image):
-    #preprocessing the image
-    processor_instance, model_instance = get_model_components()
-    raw_image = Image.open(image).convert("RGB")
+def generate_blip_caption(image_path, processor_instance, model_instance):
+    raw_image = Image.open(image_path).convert("RGB")
     inputs = processor_instance(raw_image, text=PROMPT, return_tensors="pt")
-    inputs = {k: v.to(DEVICE) for k, v in inputs.items()}
+    inputs = move_inputs_to_device(inputs)
 
     with torch.no_grad():
-        #generating caption using the model
-        out = model_instance.generate(
+        output = model_instance.generate(
             **inputs,
             max_new_tokens=MAX_NEW_TOKENS,
             min_new_tokens=MIN_NEW_TOKENS,
@@ -82,17 +106,64 @@ def generate_caption(image):
             repetition_penalty=REPETITION_PENALTY,
         )
 
-    caption = processor_instance.decode(out[0], skip_special_tokens=True)
-    return caption
+    return processor_instance.decode(output[0], skip_special_tokens=True)
+
+
+def generate_qwen_caption(image_path, processor_instance, model_instance):
+    raw_image = Image.open(image_path).convert("RGB")
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": raw_image},
+                {"type": "text", "text": PROMPT},
+            ],
+        }
+    ]
+    prompt_text = processor_instance.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    inputs = processor_instance(
+        text=[prompt_text],
+        images=[raw_image],
+        return_tensors="pt",
+    )
+    inputs = move_inputs_to_device(inputs)
+
+    with torch.no_grad():
+        output = model_instance.generate(
+            **inputs,
+            max_new_tokens=MAX_NEW_TOKENS,
+            min_new_tokens=MIN_NEW_TOKENS,
+            num_beams=NUM_BEAMS,
+            repetition_penalty=REPETITION_PENALTY,
+        )
+
+    trimmed_output = output[:, inputs["input_ids"].shape[1]:]
+    return processor_instance.batch_decode(
+        trimmed_output,
+        skip_special_tokens=True,
+        clean_up_tokenization_spaces=False,
+    )[0]
+
+
+#function to generate caption for the input image
+def generate_caption(image):
+    processor_instance, model_instance = get_model_components()
+    if IS_QWEN_VL:
+        return generate_qwen_caption(image, processor_instance, model_instance)
+    return generate_blip_caption(image, processor_instance, model_instance)
 
 #defining the gradio interface
 ifc = gr.Interface(
     fn=generate_caption,
     inputs=gr.Image(type="filepath"),
     outputs=gr.Textbox(label="Detailed Caption"),
-    title=" AI Image Captioning with BLIP",
+    title="AI Image Captioning",
     description=(
-        "Upload an image to generate a detailed caption using the BLIP model. "
+        "Upload an image to generate a detailed caption using the configured vision-language model. "
         f"Current model source: {MODEL_SOURCE}"
     ),
 )
