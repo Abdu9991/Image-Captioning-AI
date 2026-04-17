@@ -27,6 +27,7 @@ Current default generation configuration in `main.py`:
 - `no_repeat_ngram_size=3`
 
 The web UI also exposes a `Caption Detail Level` selector with `Brief`, `Detailed`, and `Highly Detailed` modes. You can set the default selection with `CAPTION_DETAIL_LEVEL`.
+`Detailed` is tuned to return faster than `Highly Detailed` by using a smaller token budget and fewer beams.
 
 ## Tech Stack
 
@@ -110,7 +111,8 @@ Notes for Qwen 2.5 VL:
 
 - Render instances are CPU-bound, so Qwen 2.5 VL is usually not a practical default there.
 - The Docker image now prefetches `Salesforce/blip-image-captioning-base` during build so first-request latency is much lower after deployment.
-- The app also starts a background model warm-up task on boot when `PRELOAD_MODEL_ON_STARTUP=true`.
+- The Render container now disables startup preload and limits PyTorch and OpenMP threads to reduce memory pressure.
+- Render defaults also reduce beam count and token budgets on CPU to avoid slowdowns from memory contention.
 - If you want the smallest cold-start cost on Render, keep `MODEL_ID` set to the default BLIP model.
 
 Optional memory-related tuning:

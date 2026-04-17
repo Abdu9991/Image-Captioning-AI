@@ -29,7 +29,12 @@ WORKDIR /app
 
 ENV HF_HOME=/opt/huggingface
 ENV TRANSFORMERS_CACHE=/opt/huggingface
-ENV PRELOAD_MODEL_ON_STARTUP=true
+ENV PRELOAD_MODEL_ON_STARTUP=false
+ENV RENDER_OPTIMIZED=true
+ENV TORCH_NUM_THREADS=1
+ENV OMP_NUM_THREADS=1
+ENV MKL_NUM_THREADS=1
+ENV TOKENIZERS_PARALLELISM=false
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -41,7 +46,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy Python packages from builder
 COPY --from=builder /root/.local /root/.local
 COPY --from=builder /opt/huggingface /opt/huggingface
-ENV PATH=/root/.local/bin:$PATH
+ENV PATH="/root/.local/bin:${PATH}"
 
 # Copy application code
 COPY main.py .

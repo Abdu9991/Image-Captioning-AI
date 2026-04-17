@@ -18,6 +18,13 @@ from transformers import (
 
 warnings.filterwarnings("ignore")
 
+IS_RENDER = bool(os.environ.get("RENDER")) or bool(os.environ.get("RENDER_INSTANCE_ID"))
+HAS_CUDA = torch.cuda.is_available()
+RENDER_OPTIMIZED = os.environ.get(
+    "RENDER_OPTIMIZED",
+    "true" if IS_RENDER else "false",
+).lower() == "true"
+
 
 def _get_int_env(name, default):
     value = os.environ.get(name)
@@ -36,16 +43,23 @@ FINETUNED_MODEL_PATH = os.environ.get("FINETUNED_MODEL_PATH")
 MODEL_SOURCE = FINETUNED_MODEL_PATH or MODEL_ID
 
 PROMPT = os.environ.get("CAPTION_PROMPT", "a detailed description of")
-MAX_NEW_TOKENS = _get_int_env("CAPTION_MAX_NEW_TOKENS", 48)
-MIN_NEW_TOKENS = _get_int_env("CAPTION_MIN_NEW_TOKENS", 10)
-NUM_BEAMS = _get_int_env("CAPTION_NUM_BEAMS", 3)
+DEFAULT_MAX_NEW_TOKENS = 32 if RENDER_OPTIMIZED and not HAS_CUDA else 48
+DEFAULT_MIN_NEW_TOKENS = 6 if RENDER_OPTIMIZED and not HAS_CUDA else 10
+DEFAULT_NUM_BEAMS = 1 if RENDER_OPTIMIZED and not HAS_CUDA else 3
+
+MAX_NEW_TOKENS = _get_int_env("CAPTION_MAX_NEW_TOKENS", DEFAULT_MAX_NEW_TOKENS)
+MIN_NEW_TOKENS = _get_int_env("CAPTION_MIN_NEW_TOKENS", DEFAULT_MIN_NEW_TOKENS)
+NUM_BEAMS = _get_int_env("CAPTION_NUM_BEAMS", DEFAULT_NUM_BEAMS)
 REPETITION_PENALTY = float(os.environ.get("CAPTION_REPETITION_PENALTY", 1.15))
 DEFAULT_DETAIL_LEVEL = os.environ.get("CAPTION_DETAIL_LEVEL", "Detailed").title()
 NO_REPEAT_NGRAM_SIZE = _get_int_env("CAPTION_NO_REPEAT_NGRAM_SIZE", 3)
 PRELOAD_MODEL_ON_STARTUP = os.environ.get("PRELOAD_MODEL_ON_STARTUP", "true").lower() == "true"
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+DEVICE = "cuda" if HAS_CUDA else "cpu"
 DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
+
+if RENDER_OPTIMIZED and DEVICE == "cpu":
+    torch.set_num_threads(_get_int_env("TORCH_NUM_THREADS", 1))
 
 processor = None
 model = None
@@ -57,16 +71,19 @@ DETAIL_LEVELS = {
         "prompt": "a concise description of",
         "min_new_tokens": max(4, MIN_NEW_TOKENS // 2),
         "max_new_tokens": max(16, MAX_NEW_TOKENS // 2),
+        "num_beams": 1,
     },
     "Detailed": {
         "prompt": PROMPT,
-        "min_new_tokens": MIN_NEW_TOKENS,
-        "max_new_tokens": MAX_NEW_TOKENS,
+        "min_new_tokens": max(6 if RENDER_OPTIMIZED and DEVICE == "cpu" else 8, MIN_NEW_TOKENS - 2),
+        "max_new_tokens": max(24 if RENDER_OPTIMIZED and DEVICE == "cpu" else 32, MAX_NEW_TOKENS - 8),
+        "num_beams": 1 if RENDER_OPTIMIZED and DEVICE == "cpu" else 2,
     },
     "Highly Detailed": {
         "prompt": "an exhaustive and richly detailed description of",
         "min_new_tokens": max(MIN_NEW_TOKENS, 16),
         "max_new_tokens": max(MAX_NEW_TOKENS, 72),
+        "num_beams": NUM_BEAMS,
     },
 }
 
@@ -98,6 +115,17 @@ def clean_caption_text(text):
     cleaned_text = re.sub(r"\b([A-Za-z]+)(?:\s+\1\b)+", r"\1", cleaned_text, flags=re.IGNORECASE)
     cleaned_text = re.sub(r"\s{2,}", " ", cleaned_text)
     return cleaned_text.strip()
+
+
+def get_generation_kwargs(detail_config):
+    return {
+        "max_new_tokens": detail_config["max_new_tokens"],
+        "min_new_tokens": detail_config["min_new_tokens"],
+        "num_beams": detail_config["num_beams"],
+        "no_repeat_ngram_size": NO_REPEAT_NGRAM_SIZE,
+        "repetition_penalty": REPETITION_PENALTY,
+        "early_stopping": detail_config["num_beams"] > 1,
+    }
 
 
 def get_model_components():
@@ -154,14 +182,10 @@ def generate_blip_caption(image_path, processor_instance, model_instance, detail
     )
     inputs = move_inputs_to_device(inputs)
 
-    with torch.no_grad():
+    with torch.inference_mode():
         output = model_instance.generate(
             **inputs,
-            max_new_tokens=detail_config["max_new_tokens"],
-            min_new_tokens=detail_config["min_new_tokens"],
-            num_beams=NUM_BEAMS,
-            no_repeat_ngram_size=NO_REPEAT_NGRAM_SIZE,
-            repetition_penalty=REPETITION_PENALTY,
+            **get_generation_kwargs(detail_config),
         )
 
     return clean_caption_text(
@@ -192,14 +216,10 @@ def generate_qwen_caption(image_path, processor_instance, model_instance, detail
     )
     inputs = move_inputs_to_device(inputs)
 
-    with torch.no_grad():
+    with torch.inference_mode():
         output = model_instance.generate(
             **inputs,
-            max_new_tokens=detail_config["max_new_tokens"],
-            min_new_tokens=detail_config["min_new_tokens"],
-            num_beams=NUM_BEAMS,
-            no_repeat_ngram_size=NO_REPEAT_NGRAM_SIZE,
-            repetition_penalty=REPETITION_PENALTY,
+            **get_generation_kwargs(detail_config),
         )
 
     trimmed_output = output[:, inputs["input_ids"].shape[1]:]
