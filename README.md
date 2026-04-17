@@ -106,6 +106,13 @@ Notes for Qwen 2.5 VL:
 - GPU is strongly preferred for acceptable startup and inference speed.
 - The first run downloads the full checkpoint from Hugging Face.
 
+## Render Deployment Notes
+
+- Render instances are CPU-bound, so Qwen 2.5 VL is usually not a practical default there.
+- The Docker image now prefetches `Salesforce/blip-image-captioning-base` during build so first-request latency is much lower after deployment.
+- The app also starts a background model warm-up task on boot when `PRELOAD_MODEL_ON_STARTUP=true`.
+- If you want the smallest cold-start cost on Render, keep `MODEL_ID` set to the default BLIP model.
+
 Optional memory-related tuning:
 
 ```powershell

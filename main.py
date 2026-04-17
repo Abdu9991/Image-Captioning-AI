@@ -42,6 +42,7 @@ NUM_BEAMS = _get_int_env("CAPTION_NUM_BEAMS", 3)
 REPETITION_PENALTY = float(os.environ.get("CAPTION_REPETITION_PENALTY", 1.15))
 DEFAULT_DETAIL_LEVEL = os.environ.get("CAPTION_DETAIL_LEVEL", "Detailed").title()
 NO_REPEAT_NGRAM_SIZE = _get_int_env("CAPTION_NO_REPEAT_NGRAM_SIZE", 3)
+PRELOAD_MODEL_ON_STARTUP = os.environ.get("PRELOAD_MODEL_ON_STARTUP", "true").lower() == "true"
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
@@ -49,6 +50,7 @@ DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
 processor = None
 model = None
 _model_lock = threading.Lock()
+_preload_started = False
 
 DETAIL_LEVELS = {
     "Brief": {
@@ -125,6 +127,22 @@ def get_model_components():
         model.eval()
 
     return processor, model
+
+
+def preload_model_components():
+    global _preload_started
+    if not PRELOAD_MODEL_ON_STARTUP or _preload_started:
+        return
+
+    _preload_started = True
+
+    def _preload():
+        try:
+            get_model_components()
+        except Exception as exc:
+            print(f"Background model preload failed: {exc}")
+
+    threading.Thread(target=_preload, daemon=True).start()
 
 
 def generate_blip_caption(image_path, processor_instance, model_instance, detail_config):
@@ -221,6 +239,11 @@ ifc = gr.Interface(
 )
 
 app = gr.mount_gradio_app(FastAPI(), ifc, path="/")
+
+
+@app.on_event("startup")
+async def startup_event():
+    preload_model_components()
 
 #launching the interface
 if __name__ == "__main__":

@@ -1,7 +1,14 @@
 # Stage 1: Builder
 FROM python:3.11-slim as builder
 
+ARG MODEL_ID=Salesforce/blip-image-captioning-base
+ARG PREFETCH_MODEL=true
+
 WORKDIR /app
+
+ENV HF_HOME=/opt/huggingface
+ENV TRANSFORMERS_CACHE=/opt/huggingface
+ENV MODEL_ID=${MODEL_ID}
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -12,10 +19,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --user --no-cache-dir -r requirements.txt
 
+# Pre-download the default model during the image build so runtime startup on Render is faster.
+RUN if [ "$PREFETCH_MODEL" = "true" ]; then python -c "from transformers import BlipForConditionalGeneration, BlipProcessor; import os; model_id = os.environ['MODEL_ID']; BlipProcessor.from_pretrained(model_id); BlipForConditionalGeneration.from_pretrained(model_id, low_cpu_mem_usage=True)"; fi
+
 # Stage 2: Runtime
 FROM python:3.11-slim
 
 WORKDIR /app
+
+ENV HF_HOME=/opt/huggingface
+ENV TRANSFORMERS_CACHE=/opt/huggingface
+ENV PRELOAD_MODEL_ON_STARTUP=true
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -26,6 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy Python packages from builder
 COPY --from=builder /root/.local /root/.local
+COPY --from=builder /opt/huggingface /opt/huggingface
 ENV PATH=/root/.local/bin:$PATH
 
 # Copy application code
