@@ -24,6 +24,9 @@ Current default generation configuration in `main.py`:
 - `min_new_tokens=10`
 - `num_beams=3`
 - `repetition_penalty=1.15`
+- `no_repeat_ngram_size=3`
+
+The web UI also exposes a `Caption Detail Level` selector with `Brief`, `Detailed`, and `Highly Detailed` modes. You can set the default selection with `CAPTION_DETAIL_LEVEL`.
 
 ## Tech Stack
 
@@ -107,8 +110,10 @@ Optional memory-related tuning:
 
 ```powershell
 $env:MODEL_ID="Salesforce/blip-image-captioning-base"
+$env:CAPTION_DETAIL_LEVEL="Highly Detailed"
 $env:CAPTION_MAX_NEW_TOKENS="40"
 $env:CAPTION_NUM_BEAMS="2"
+$env:CAPTION_NO_REPEAT_NGRAM_SIZE="3"
 ```
 
 Then open:

@@ -1,5 +1,6 @@
 #importing relevant libraries
 import os
+import re
 import threading
 import warnings
 
@@ -39,6 +40,8 @@ MAX_NEW_TOKENS = _get_int_env("CAPTION_MAX_NEW_TOKENS", 48)
 MIN_NEW_TOKENS = _get_int_env("CAPTION_MIN_NEW_TOKENS", 10)
 NUM_BEAMS = _get_int_env("CAPTION_NUM_BEAMS", 3)
 REPETITION_PENALTY = float(os.environ.get("CAPTION_REPETITION_PENALTY", 1.15))
+DEFAULT_DETAIL_LEVEL = os.environ.get("CAPTION_DETAIL_LEVEL", "Detailed").title()
+NO_REPEAT_NGRAM_SIZE = _get_int_env("CAPTION_NO_REPEAT_NGRAM_SIZE", 3)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
@@ -46,6 +49,24 @@ DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
 processor = None
 model = None
 _model_lock = threading.Lock()
+
+DETAIL_LEVELS = {
+    "Brief": {
+        "prompt": "a concise description of",
+        "min_new_tokens": max(4, MIN_NEW_TOKENS // 2),
+        "max_new_tokens": max(16, MAX_NEW_TOKENS // 2),
+    },
+    "Detailed": {
+        "prompt": PROMPT,
+        "min_new_tokens": MIN_NEW_TOKENS,
+        "max_new_tokens": MAX_NEW_TOKENS,
+    },
+    "Highly Detailed": {
+        "prompt": "an exhaustive and richly detailed description of",
+        "min_new_tokens": max(MIN_NEW_TOKENS, 16),
+        "max_new_tokens": max(MAX_NEW_TOKENS, 72),
+    },
+}
 
 
 def is_qwen_vl_model(model_source):
@@ -61,6 +82,20 @@ def move_inputs_to_device(inputs):
         key: value.to(DEVICE) if hasattr(value, "to") else value
         for key, value in inputs.items()
     }
+
+
+def get_detail_config(detail_level):
+    normalized_level = (detail_level or DEFAULT_DETAIL_LEVEL).title()
+    return DETAIL_LEVELS.get(normalized_level, DETAIL_LEVELS["Detailed"])
+
+
+def clean_caption_text(text):
+    cleaned_text = re.sub(r"\s+'\s*", "'", text)
+    cleaned_text = re.sub(r"\s+([,.;:!?])", r"\1", cleaned_text)
+    cleaned_text = re.sub(r"\b([A-Za-z]+)(?:\s*,\s*\1\b)+", r"\1", cleaned_text, flags=re.IGNORECASE)
+    cleaned_text = re.sub(r"\b([A-Za-z]+)(?:\s+\1\b)+", r"\1", cleaned_text, flags=re.IGNORECASE)
+    cleaned_text = re.sub(r"\s{2,}", " ", cleaned_text)
+    return cleaned_text.strip()
 
 
 def get_model_components():
@@ -92,31 +127,38 @@ def get_model_components():
     return processor, model
 
 
-def generate_blip_caption(image_path, processor_instance, model_instance):
+def generate_blip_caption(image_path, processor_instance, model_instance, detail_config):
     raw_image = Image.open(image_path).convert("RGB")
-    inputs = processor_instance(raw_image, text=PROMPT, return_tensors="pt")
+    inputs = processor_instance(
+        raw_image,
+        text=detail_config["prompt"],
+        return_tensors="pt",
+    )
     inputs = move_inputs_to_device(inputs)
 
     with torch.no_grad():
         output = model_instance.generate(
             **inputs,
-            max_new_tokens=MAX_NEW_TOKENS,
-            min_new_tokens=MIN_NEW_TOKENS,
+            max_new_tokens=detail_config["max_new_tokens"],
+            min_new_tokens=detail_config["min_new_tokens"],
             num_beams=NUM_BEAMS,
+            no_repeat_ngram_size=NO_REPEAT_NGRAM_SIZE,
             repetition_penalty=REPETITION_PENALTY,
         )
 
-    return processor_instance.decode(output[0], skip_special_tokens=True)
+    return clean_caption_text(
+        processor_instance.decode(output[0], skip_special_tokens=True)
+    )
 
 
-def generate_qwen_caption(image_path, processor_instance, model_instance):
+def generate_qwen_caption(image_path, processor_instance, model_instance, detail_config):
     raw_image = Image.open(image_path).convert("RGB")
     messages = [
         {
             "role": "user",
             "content": [
                 {"type": "image", "image": raw_image},
-                {"type": "text", "text": PROMPT},
+                {"type": "text", "text": detail_config["prompt"]},
             ],
         }
     ]
@@ -135,36 +177,46 @@ def generate_qwen_caption(image_path, processor_instance, model_instance):
     with torch.no_grad():
         output = model_instance.generate(
             **inputs,
-            max_new_tokens=MAX_NEW_TOKENS,
-            min_new_tokens=MIN_NEW_TOKENS,
+            max_new_tokens=detail_config["max_new_tokens"],
+            min_new_tokens=detail_config["min_new_tokens"],
             num_beams=NUM_BEAMS,
+            no_repeat_ngram_size=NO_REPEAT_NGRAM_SIZE,
             repetition_penalty=REPETITION_PENALTY,
         )
 
     trimmed_output = output[:, inputs["input_ids"].shape[1]:]
-    return processor_instance.batch_decode(
-        trimmed_output,
-        skip_special_tokens=True,
-        clean_up_tokenization_spaces=False,
-    )[0]
+    return clean_caption_text(
+        processor_instance.batch_decode(
+            trimmed_output,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False,
+        )[0]
+    )
 
 
 #function to generate caption for the input image
-def generate_caption(image):
+def generate_caption(image, detail_level):
     processor_instance, model_instance = get_model_components()
+    detail_config = get_detail_config(detail_level)
     if IS_QWEN_VL:
-        return generate_qwen_caption(image, processor_instance, model_instance)
-    return generate_blip_caption(image, processor_instance, model_instance)
+        return generate_qwen_caption(image, processor_instance, model_instance, detail_config)
+    return generate_blip_caption(image, processor_instance, model_instance, detail_config)
 
 #defining the gradio interface
 ifc = gr.Interface(
     fn=generate_caption,
-    inputs=gr.Image(type="filepath"),
+    inputs=[
+        gr.Image(type="filepath"),
+        gr.Dropdown(
+            choices=list(DETAIL_LEVELS.keys()),
+            value=DEFAULT_DETAIL_LEVEL if DEFAULT_DETAIL_LEVEL in DETAIL_LEVELS else "Detailed",
+            label="Caption Detail Level",
+        ),
+    ],
     outputs=gr.Textbox(label="Detailed Caption"),
     title="AI Image Captioning",
     description=(
-        "Upload an image to generate a detailed caption using the configured vision-language model. "
-        f"Current model source: {MODEL_SOURCE}"
+        "Upload a photo to get a natural-language caption, then adjust the detail level to make the result shorter, richer, or more descriptive."
     ),
 )
 
