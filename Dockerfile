@@ -2,6 +2,7 @@
 FROM python:3.11-slim as builder
 
 ARG MODEL_ID=Salesforce/blip-image-captioning-base
+ARG FINETUNED_MODEL_PATH=
 ARG PREFETCH_MODEL=true
 
 WORKDIR /app
@@ -9,6 +10,7 @@ WORKDIR /app
 ENV HF_HOME=/opt/huggingface
 ENV TRANSFORMERS_CACHE=/opt/huggingface
 ENV MODEL_ID=${MODEL_ID}
+ENV FINETUNED_MODEL_PATH=${FINETUNED_MODEL_PATH}
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -19,11 +21,38 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --user --no-cache-dir -r requirements.txt
 
-# Pre-download the default model during the image build so runtime startup on Render is faster.
-RUN if [ "$PREFETCH_MODEL" = "true" ]; then python -c "from transformers import BlipForConditionalGeneration, BlipProcessor; import os; model_id = os.environ['MODEL_ID']; BlipProcessor.from_pretrained(model_id); BlipForConditionalGeneration.from_pretrained(model_id, low_cpu_mem_usage=True)"; fi
+# Pre-download the configured model during the image build so runtime startup is faster.
+# Prefer a fine-tuned BLIP checkpoint when FINETUNED_MODEL_PATH is provided.
+RUN if [ "$PREFETCH_MODEL" = "true" ]; then python - <<'PY'
+import os
+
+from transformers import (
+    AutoProcessor,
+    BlipForConditionalGeneration,
+    Blip2ForConditionalGeneration,
+    Blip2Processor,
+    BlipProcessor,
+)
+
+model_source = os.environ.get("FINETUNED_MODEL_PATH") or os.environ["MODEL_ID"]
+normalized = model_source.lower()
+
+if "qwen2.5-vl" in normalized or "qwen-vl" in normalized:
+    AutoProcessor.from_pretrained(model_source)
+elif "blip2" in normalized:
+    Blip2Processor.from_pretrained(model_source)
+    Blip2ForConditionalGeneration.from_pretrained(model_source, low_cpu_mem_usage=True)
+else:
+    BlipProcessor.from_pretrained(model_source)
+    BlipForConditionalGeneration.from_pretrained(model_source, low_cpu_mem_usage=True)
+PY
+fi
 
 # Stage 2: Runtime
 FROM python:3.11-slim
+
+ARG MODEL_ID=Salesforce/blip-image-captioning-base
+ARG FINETUNED_MODEL_PATH=
 
 WORKDIR /app
 
@@ -35,6 +64,8 @@ ENV TORCH_NUM_THREADS=1
 ENV OMP_NUM_THREADS=1
 ENV MKL_NUM_THREADS=1
 ENV TOKENIZERS_PARALLELISM=false
+ENV MODEL_ID=${MODEL_ID}
+ENV FINETUNED_MODEL_PATH=${FINETUNED_MODEL_PATH}
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \

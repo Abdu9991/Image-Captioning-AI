@@ -1,20 +1,20 @@
 # Image-Captioning-AI
 
-An AI-powered image captioning web app built with Gradio, PyTorch, and Hugging Face vision-language models including Salesforce BLIP and Qwen 2.5 VL. Upload an image and the app generates a detailed natural-language description.
+An AI-powered image captioning web app built with Gradio, PyTorch, and Hugging Face vision-language models including Salesforce BLIP, BLIP-2, and Qwen 2.5 VL. Upload an image and the app generates a detailed natural-language description.
 
 ## Project Overview
 
 This project provides:
 - A local web UI for image upload and caption generation.
-- BLIP and Qwen 2.5 VL captioning with tuned generation settings for richer output.
+- BLIP, BLIP-2, and Qwen 2.5 VL captioning with tuned generation settings for richer output.
 - Docker support for containerized execution.
 - Terraform infrastructure for Azure Container Apps deployment.
 
 ## How It Works
 
-The app defaults to `Salesforce/blip-image-captioning-base` (lower memory) and can switch to Qwen 2.5 VL or a fine-tuned checkpoint via environment variables. It performs:
+The app defaults to `Salesforce/blip-image-captioning-base` (lower memory) and can switch to BLIP-2, Qwen 2.5 VL, or a fine-tuned checkpoint via environment variables. It performs:
 1. Image preprocessing with PIL.
-2. Model-specific preprocessing via `BlipProcessor` or `AutoProcessor`.
+2. Model-specific preprocessing via `BlipProcessor`, `Blip2Processor`, or `AutoProcessor`.
 3. Caption generation with beam search and length controls.
 4. Text decoding and display in the Gradio UI.
 
@@ -26,7 +26,20 @@ Current default generation configuration in `main.py`:
 - `repetition_penalty=1.15`
 - `no_repeat_ngram_size=3`
 
-The web UI also exposes a `Caption Detail Level` selector with `Brief`, `Detailed`, and `Highly Detailed` modes. You can set the default selection with `CAPTION_DETAIL_LEVEL`.
+The web UI accepts an uploaded image and returns the selected caption output in a single result panel on the right-hand side. You can choose `All`, `Brief`, `Detailed`, or `Highly Detailed` before generating.
+
+Caption rules:
+
+- Brief caption: one very short sentence focused only on the main subject.
+- Detailed caption: 1-2 sentences with subject, basic attributes, and setting.
+- Highly detailed caption: 2-3 sentences in a storyteller style with rich scene detail, lighting, mood, environment, and action, while avoiding repeated words or phrases.
+
+Example output style:
+
+- Brief: `A dog runs freely.`
+- Detailed: `A cheerful brown dog runs across a sunny park, enjoying the open grassy space.`
+- Highly detailed: `A lively brown dog dashes across a vibrant green park, its paws barely touching the ground as sunlight filters through the trees. The gentle breeze moves the leaves, and the open space feels bright, fresh, and full of energy. The moment unfolds like a small scene from a story, filled with movement, freedom, and joy.`
+
 `Detailed` is tuned to return faster than `Highly Detailed` by using a smaller token budget and fewer beams.
 
 ## Tech Stack
@@ -107,13 +120,58 @@ Notes for Qwen 2.5 VL:
 - GPU is strongly preferred for acceptable startup and inference speed.
 - The first run downloads the full checkpoint from Hugging Face.
 
+Use BLIP-2:
+
+```powershell
+$env:MODEL_ID="Salesforce/blip2-opt-2.7b"
+c:/Users/abdua/Desktop/AM/AI/Image-Captioning-AI/.venv/Scripts/python.exe main.py
+```
+
+Notes for BLIP-2:
+- BLIP-2 is supported directly by the app and usually produces stronger captions than the base BLIP model.
+- `Salesforce/blip2-opt-2.7b` is a common general-purpose choice, but it needs much more RAM than `Salesforce/blip-image-captioning-base`.
+- BLIP-2 is not a good default for low-memory Render deployments unless you substantially increase container memory.
+
 ## Render Deployment Notes
 
-- Render instances are CPU-bound, so Qwen 2.5 VL is usually not a practical default there.
-- The Docker image now prefetches `Salesforce/blip-image-captioning-base` during build so first-request latency is much lower after deployment.
+- Render instances are CPU-bound, so Qwen 2.5 VL and BLIP-2 are usually not practical defaults there.
+- The Docker image now prefetches the configured base model or fine-tuned checkpoint during build so first-request latency is much lower after deployment.
 - The Render container now disables startup preload and limits PyTorch and OpenMP threads to reduce memory pressure.
 - Render defaults also reduce beam count and token budgets on CPU to avoid slowdowns from memory contention.
 - If you want the smallest cold-start cost on Render, keep `MODEL_ID` set to the default BLIP model.
+- Fine-tuning by itself does not reduce inference memory. To lower Render memory usage, fine-tune a small base model such as `Salesforce/blip-image-captioning-base` and deploy that checkpoint instead of switching to BLIP-2 or Qwen.
+
+Recommended low-memory Render setup:
+
+- Base model for fine-tuning: `Salesforce/blip-image-captioning-base`
+- Deploy target: a fine-tuned BLIP checkpoint published as a Hugging Face model repo
+- Keep `RENDER_OPTIMIZED=true`
+- Keep `PRELOAD_MODEL_ON_STARTUP=false`
+- Avoid BLIP-2 and Qwen on small Render instances
+
+If you have a fine-tuned Hugging Face checkpoint, set Render environment variables like this:
+
+```text
+MODEL_ID=Salesforce/blip-image-captioning-base
+FINETUNED_MODEL_PATH=your-org/your-finetuned-blip-base
+RENDER_OPTIMIZED=true
+PRELOAD_MODEL_ON_STARTUP=false
+TORCH_NUM_THREADS=1
+OMP_NUM_THREADS=1
+MKL_NUM_THREADS=1
+TOKENIZERS_PARALLELISM=false
+```
+
+If you build the Docker image yourself, you can prefetch the fine-tuned checkpoint during build:
+
+```powershell
+docker build `
+  --build-arg MODEL_ID="Salesforce/blip-image-captioning-base" `
+  --build-arg FINETUNED_MODEL_PATH="your-org/your-finetuned-blip-base" `
+  -t image-captioning-ai:latest .
+```
+
+Use a Hugging Face model ID for Render. A local fine-tuned path will not exist inside the deployed container unless you explicitly copy that checkpoint into the image.
 
 Optional memory-related tuning:
 
