@@ -376,19 +376,22 @@ def generate_single_caption(image, detail_level):
 
 def generate_caption_set(image, caption_option):
     if image:
-        selected_option = (caption_option or "All").title()
-        captions = {
-            detail_level: generate_single_caption(image, detail_level)
-            for detail_level in DETAIL_LEVELS
-        }
+        selected_option = (caption_option or DEFAULT_DETAIL_LEVEL).title()
 
         if selected_option == "All":
+            captions = {
+                detail_level: generate_single_caption(image, detail_level)
+                for detail_level in DETAIL_LEVELS
+            }
             return "\n\n".join(
                 f"{detail_level} Caption\n{captions[detail_level]}"
                 for detail_level in DETAIL_LEVELS
             )
 
-        return captions[selected_option]
+        if selected_option not in DETAIL_LEVELS:
+            selected_option = DEFAULT_DETAIL_LEVEL if DEFAULT_DETAIL_LEVEL in DETAIL_LEVELS else "Detailed"
+
+        return generate_single_caption(image, selected_option)
 
     raise gr.Error("Upload an image to generate captions.")
 
@@ -580,9 +583,9 @@ with gr.Blocks(title="AI Image Captioning", css=APP_CSS, theme=gr.themes.Soft())
                     image_input = gr.Image(type="filepath", label="image", elem_classes=["image-input"])
                     caption_option = gr.Radio(
                         choices=["All", "Brief", "Detailed", "Highly Detailed"],
-                        value="All",
+                        value=DEFAULT_DETAIL_LEVEL if DEFAULT_DETAIL_LEVEL in DETAIL_LEVELS else "Detailed",
                         label="Caption Selection",
-                        info="Choose whether to generate all caption levels or only one.",
+                        info="Choose one caption level for faster results, or select All to generate every level.",
                         elem_classes=["selection-wrap"],
                     )
 
