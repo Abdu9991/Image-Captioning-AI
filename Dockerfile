@@ -1,5 +1,5 @@
 # Stage 1: Builder
-FROM python:3.11-slim as builder
+FROM python:3.11-slim AS builder
 
 ARG MODEL_ID=Salesforce/blip-image-captioning-base
 ARG FINETUNED_MODEL_PATH=
@@ -23,7 +23,8 @@ RUN pip install --user --no-cache-dir -r requirements.txt
 
 # Pre-download the configured model during the image build so runtime startup is faster.
 # Prefer a fine-tuned BLIP checkpoint when FINETUNED_MODEL_PATH is provided.
-RUN if [ "$PREFETCH_MODEL" = "true" ]; then python - <<'PY'
+RUN if [ "$PREFETCH_MODEL" = "true" ]; then \
+        cat > /tmp/prefetch_model.py <<'PY'
 import os
 
 from transformers import (
@@ -46,7 +47,9 @@ else:
     BlipProcessor.from_pretrained(model_source)
     BlipForConditionalGeneration.from_pretrained(model_source, low_cpu_mem_usage=True)
 PY
-fi
+        python /tmp/prefetch_model.py; \
+        rm -f /tmp/prefetch_model.py; \
+    fi
 
 # Stage 2: Runtime
 FROM python:3.11-slim
