@@ -50,6 +50,10 @@ PROMPT = os.environ.get("CAPTION_PROMPT", "a detailed description of")
 DEFAULT_MAX_NEW_TOKENS = 24 if RENDER_OPTIMIZED and not HAS_CUDA else 48
 DEFAULT_MIN_NEW_TOKENS = 5 if RENDER_OPTIMIZED and not HAS_CUDA else 10
 DEFAULT_NUM_BEAMS = 1 if RENDER_OPTIMIZED and not HAS_CUDA else 3
+CPU_QUANTIZE = os.environ.get(
+    "CPU_QUANTIZE",
+    "true" if RENDER_OPTIMIZED and not HAS_CUDA else "false",
+).lower() == "true"
 
 MAX_NEW_TOKENS = _get_int_env("CAPTION_MAX_NEW_TOKENS", DEFAULT_MAX_NEW_TOKENS)
 MIN_NEW_TOKENS = _get_int_env("CAPTION_MIN_NEW_TOKENS", DEFAULT_MIN_NEW_TOKENS)
@@ -79,26 +83,41 @@ DETAIL_LEVELS = {
         "instruction": "Describe only what is visible in this image in one short creative natural sentence. Keep it simple, vivid, image-based, and story-like. Do not repeat words.",
         "sentence_count": 1,
         "min_new_tokens": max(4, MIN_NEW_TOKENS // 2),
-        "max_new_tokens": max(16, MAX_NEW_TOKENS // 2),
+        "max_new_tokens": max(12, MAX_NEW_TOKENS // 2),
         "num_beams": 1,
     },
     "Detailed": {
         "prompt": PROMPT,
         "instruction": "Describe only what is visible in this image in one creative natural sentence. Include the subject, appearance, action, setting, and clear visual context with a gentle story-like tone. Do not repeat words.",
         "sentence_count": 1,
-        "min_new_tokens": max(5 if RENDER_OPTIMIZED and DEVICE == "cpu" else 8, MIN_NEW_TOKENS - 2),
-        "max_new_tokens": max(18 if RENDER_OPTIMIZED and DEVICE == "cpu" else 32, MAX_NEW_TOKENS - 8),
+        "min_new_tokens": max(4 if RENDER_OPTIMIZED and DEVICE == "cpu" else 8, MIN_NEW_TOKENS - 2),
+        "max_new_tokens": max(14 if RENDER_OPTIMIZED and DEVICE == "cpu" else 32, MAX_NEW_TOKENS - 8),
         "num_beams": 1 if RENDER_OPTIMIZED and DEVICE == "cpu" else 2,
     },
     "Highly Detailed": {
         "prompt": "a richly detailed visual description of",
         "instruction": "Describe only what is clearly visible in this image in a rich, cinematic, story-like paragraph of two or three natural sentences. Focus on the real subject, action, setting, lighting, atmosphere, and background details. Keep the writing expressive but grounded in visible evidence, avoid artist names, website names, watermarks, or source attributions, and do not mention prompts or instructions.",
-        "sentence_count": 2 if RENDER_OPTIMIZED and DEVICE == "cpu" else 3,
-        "min_new_tokens": max(MIN_NEW_TOKENS, 12 if RENDER_OPTIMIZED and DEVICE == "cpu" else 16),
-        "max_new_tokens": max(MAX_NEW_TOKENS, 40 if RENDER_OPTIMIZED and DEVICE == "cpu" else 88),
+        "sentence_count": 1 if RENDER_OPTIMIZED and DEVICE == "cpu" else 3,
+        "min_new_tokens": max(MIN_NEW_TOKENS, 8 if RENDER_OPTIMIZED and DEVICE == "cpu" else 16),
+        "max_new_tokens": max(MAX_NEW_TOKENS, 24 if RENDER_OPTIMIZED and DEVICE == "cpu" else 88),
         "num_beams": 1 if RENDER_OPTIMIZED and DEVICE == "cpu" else NUM_BEAMS,
     },
 }
+
+
+def maybe_quantize_cpu_model(model_instance):
+    if not CPU_QUANTIZE or DEVICE != "cpu":
+        return model_instance
+
+    try:
+        return torch.quantization.quantize_dynamic(
+            model_instance,
+            {torch.nn.Linear},
+            dtype=torch.qint8,
+        )
+    except Exception as exc:
+        print(f"CPU quantization skipped: {exc}")
+        return model_instance
 
 
 def is_qwen_vl_model(model_source):
@@ -258,6 +277,7 @@ def get_model_components():
                     low_cpu_mem_usage=True,
                     torch_dtype=DTYPE,
                 )
+            model = maybe_quantize_cpu_model(model)
             model = model.to(DEVICE)
             model.eval()
         except Exception as exc:

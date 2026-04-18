@@ -19,7 +19,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
-RUN pip install --user --no-cache-dir -r requirements.txt
+RUN pip install --user --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.11.0 && \
+    grep -v '^torch==' requirements.txt > requirements-render.txt && \
+    pip install --user --no-cache-dir -r requirements-render.txt && \
+    rm -f requirements-render.txt
 COPY prefetch_model.py .
 
 # Pre-download the configured model during the image build so runtime startup is faster.
