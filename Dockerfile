@@ -20,36 +20,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
 RUN pip install --user --no-cache-dir -r requirements.txt
+COPY prefetch_model.py .
 
 # Pre-download the configured model during the image build so runtime startup is faster.
 # Prefer a fine-tuned BLIP checkpoint when FINETUNED_MODEL_PATH is provided.
-RUN if [ "$PREFETCH_MODEL" = "true" ]; then \
-        cat > /tmp/prefetch_model.py <<'PY'
-import os
-
-from transformers import (
-    AutoProcessor,
-    BlipForConditionalGeneration,
-    Blip2ForConditionalGeneration,
-    Blip2Processor,
-    BlipProcessor,
-)
-
-model_source = os.environ.get("FINETUNED_MODEL_PATH") or os.environ["MODEL_ID"]
-normalized = model_source.lower()
-
-if "qwen2.5-vl" in normalized or "qwen-vl" in normalized:
-    AutoProcessor.from_pretrained(model_source)
-elif "blip2" in normalized:
-    Blip2Processor.from_pretrained(model_source)
-    Blip2ForConditionalGeneration.from_pretrained(model_source, low_cpu_mem_usage=True)
-else:
-    BlipProcessor.from_pretrained(model_source)
-    BlipForConditionalGeneration.from_pretrained(model_source, low_cpu_mem_usage=True)
-PY
-        python /tmp/prefetch_model.py; \
-        rm -f /tmp/prefetch_model.py; \
-    fi
+RUN if [ "$PREFETCH_MODEL" = "true" ]; then python prefetch_model.py; fi
 
 # Stage 2: Runtime
 FROM python:3.11-slim
