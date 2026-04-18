@@ -47,8 +47,8 @@ FINETUNED_MODEL_PATH = os.environ.get("FINETUNED_MODEL_PATH")
 MODEL_SOURCE = FINETUNED_MODEL_PATH or MODEL_ID
 
 PROMPT = os.environ.get("CAPTION_PROMPT", "a detailed description of")
-DEFAULT_MAX_NEW_TOKENS = 32 if RENDER_OPTIMIZED and not HAS_CUDA else 48
-DEFAULT_MIN_NEW_TOKENS = 6 if RENDER_OPTIMIZED and not HAS_CUDA else 10
+DEFAULT_MAX_NEW_TOKENS = 24 if RENDER_OPTIMIZED and not HAS_CUDA else 48
+DEFAULT_MIN_NEW_TOKENS = 5 if RENDER_OPTIMIZED and not HAS_CUDA else 10
 DEFAULT_NUM_BEAMS = 1 if RENDER_OPTIMIZED and not HAS_CUDA else 3
 
 MAX_NEW_TOKENS = _get_int_env("CAPTION_MAX_NEW_TOKENS", DEFAULT_MAX_NEW_TOKENS)
@@ -57,7 +57,10 @@ NUM_BEAMS = _get_int_env("CAPTION_NUM_BEAMS", DEFAULT_NUM_BEAMS)
 REPETITION_PENALTY = float(os.environ.get("CAPTION_REPETITION_PENALTY", 1.15))
 DEFAULT_DETAIL_LEVEL = os.environ.get("CAPTION_DETAIL_LEVEL", "Detailed").title()
 NO_REPEAT_NGRAM_SIZE = _get_int_env("CAPTION_NO_REPEAT_NGRAM_SIZE", 3)
-PRELOAD_MODEL_ON_STARTUP = os.environ.get("PRELOAD_MODEL_ON_STARTUP", "true").lower() == "true"
+PRELOAD_MODEL_ON_STARTUP = os.environ.get(
+    "PRELOAD_MODEL_ON_STARTUP",
+    "true" if RENDER_OPTIMIZED else "true",
+).lower() == "true"
 
 DEVICE = "cuda" if HAS_CUDA else "cpu"
 DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
@@ -83,17 +86,17 @@ DETAIL_LEVELS = {
         "prompt": PROMPT,
         "instruction": "Describe only what is visible in this image in one creative natural sentence. Include the subject, appearance, action, setting, and clear visual context with a gentle story-like tone. Do not repeat words.",
         "sentence_count": 1,
-        "min_new_tokens": max(6 if RENDER_OPTIMIZED and DEVICE == "cpu" else 8, MIN_NEW_TOKENS - 2),
-        "max_new_tokens": max(24 if RENDER_OPTIMIZED and DEVICE == "cpu" else 32, MAX_NEW_TOKENS - 8),
+        "min_new_tokens": max(5 if RENDER_OPTIMIZED and DEVICE == "cpu" else 8, MIN_NEW_TOKENS - 2),
+        "max_new_tokens": max(18 if RENDER_OPTIMIZED and DEVICE == "cpu" else 32, MAX_NEW_TOKENS - 8),
         "num_beams": 1 if RENDER_OPTIMIZED and DEVICE == "cpu" else 2,
     },
     "Highly Detailed": {
         "prompt": "a richly detailed visual description of",
         "instruction": "Describe only what is clearly visible in this image in a rich, cinematic, story-like paragraph of two or three natural sentences. Focus on the real subject, action, setting, lighting, atmosphere, and background details. Keep the writing expressive but grounded in visible evidence, avoid artist names, website names, watermarks, or source attributions, and do not mention prompts or instructions.",
-        "sentence_count": 3,
-        "min_new_tokens": max(MIN_NEW_TOKENS, 16),
-        "max_new_tokens": max(MAX_NEW_TOKENS, 88),
-        "num_beams": NUM_BEAMS,
+        "sentence_count": 2 if RENDER_OPTIMIZED and DEVICE == "cpu" else 3,
+        "min_new_tokens": max(MIN_NEW_TOKENS, 12 if RENDER_OPTIMIZED and DEVICE == "cpu" else 16),
+        "max_new_tokens": max(MAX_NEW_TOKENS, 40 if RENDER_OPTIMIZED and DEVICE == "cpu" else 88),
+        "num_beams": 1 if RENDER_OPTIMIZED and DEVICE == "cpu" else NUM_BEAMS,
     },
 }
 
@@ -271,6 +274,10 @@ def preload_model_components():
         return
 
     _preload_started = True
+
+    if RENDER_OPTIMIZED and DEVICE == "cpu":
+        get_model_components()
+        return
 
     def _preload():
         try:
