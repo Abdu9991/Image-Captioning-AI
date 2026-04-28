@@ -46,6 +46,16 @@ def _get_int_env(name, default):
         return default
 
 
+def _get_float_env(name, default):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
 # Default to a smaller model for lower deployment memory usage.
 DEFAULT_MODEL_ID = "Salesforce/blip-image-captioning-base"
 MODEL_ID = os.environ.get("MODEL_ID", DEFAULT_MODEL_ID)
@@ -67,6 +77,8 @@ NUM_BEAMS = _get_int_env("CAPTION_NUM_BEAMS", DEFAULT_NUM_BEAMS)
 REPETITION_PENALTY = float(os.environ.get("CAPTION_REPETITION_PENALTY", 1.15))
 DEFAULT_DETAIL_LEVEL = os.environ.get("CAPTION_DETAIL_LEVEL", "Detailed").title()
 NO_REPEAT_NGRAM_SIZE = _get_int_env("CAPTION_NO_REPEAT_NGRAM_SIZE", 3)
+DEFAULT_MAX_TIME_SECONDS = 18.0 if RENDER_OPTIMIZED and not HAS_CUDA else 0.0
+MAX_GENERATION_TIME_SECONDS = _get_float_env("CAPTION_MAX_TIME", DEFAULT_MAX_TIME_SECONDS)
 PRELOAD_MODEL_ON_STARTUP = os.environ.get(
     "PRELOAD_MODEL_ON_STARTUP",
     "false" if RENDER_OPTIMIZED else "true",
@@ -372,7 +384,7 @@ def format_caption_output(text, detail_config, image_path=None):
 
 
 def get_generation_kwargs(detail_config):
-    return {
+    generation_kwargs = {
         "max_new_tokens": detail_config["max_new_tokens"],
         "min_new_tokens": detail_config["min_new_tokens"],
         "num_beams": detail_config["num_beams"],
@@ -381,6 +393,11 @@ def get_generation_kwargs(detail_config):
         "early_stopping": detail_config["num_beams"] > 1,
         "use_cache": True,
     }
+
+    if MAX_GENERATION_TIME_SECONDS > 0:
+        generation_kwargs["max_time"] = MAX_GENERATION_TIME_SECONDS
+
+    return generation_kwargs
 
 
 def refine_people_animal_confusion(primary_text, image_path, processor_instance, model_instance, detail_config):
@@ -655,6 +672,12 @@ def generate_caption_set(image, caption_option):
         selected_option = (caption_option or DEFAULT_DETAIL_LEVEL).title()
 
         if selected_option == "All":
+            if RENDER_OPTIMIZED and DEVICE == "cpu":
+                raise gr.Error(
+                    "Render CPU mode does not support 'All' because it is too slow. "
+                    "Choose Brief, Detailed, or Highly Detailed."
+                )
+
             captions = {
                 detail_level: generate_single_caption(image, detail_level)
                 for detail_level in DETAIL_LEVELS
