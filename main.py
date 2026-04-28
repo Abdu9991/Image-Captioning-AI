@@ -10,6 +10,7 @@ import gradio as gr
 import torch
 import uvicorn
 from fastapi import FastAPI
+from huggingface_hub import snapshot_download
 from PIL import Image
 from PIL import ImageStat
 from transformers import (
@@ -85,6 +86,7 @@ processor = None
 model = None
 _model_lock = threading.Lock()
 _preload_started = False
+_cache_warmup_started = False
 
 DETAIL_LEVELS = {
     "Brief": {
@@ -505,6 +507,35 @@ def preload_model_components():
     threading.Thread(target=_preload, daemon=True).start()
 
 
+def warm_model_cache():
+    global _cache_warmup_started
+
+    if PRELOAD_MODEL_ON_STARTUP or _cache_warmup_started:
+        return
+
+    if not RENDER_OPTIMIZED:
+        return
+
+    if FINETUNED_MODEL_PATH and os.path.exists(FINETUNED_MODEL_PATH):
+        return
+
+    if os.path.exists(MODEL_SOURCE):
+        return
+
+    _cache_warmup_started = True
+
+    def _warm_cache():
+        try:
+            snapshot_download(
+                repo_id=MODEL_SOURCE,
+                ignore_patterns=["*.h5", "*.msgpack", "*.ot"],
+            )
+        except Exception as exc:
+            print(f"Background model cache warmup failed: {exc}")
+
+    threading.Thread(target=_warm_cache, daemon=True).start()
+
+
 def generate_blip_caption(image_path, processor_instance, model_instance, detail_config):
     raw_image = Image.open(image_path).convert("RGB")
     inputs = processor_instance(
@@ -883,6 +914,7 @@ app = gr.mount_gradio_app(FastAPI(), ifc, path="/")
 @app.on_event("startup")
 async def startup_event():
     preload_model_components()
+    warm_model_cache()
 
 
 #launching the interface
