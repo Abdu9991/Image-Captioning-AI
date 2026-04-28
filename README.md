@@ -6,7 +6,11 @@ An AI-powered image captioning web app built with Gradio, PyTorch, and Hugging F
 
 This project provides:
 - A local web UI for image upload and caption generation.
-- BLIP, BLIP-2, and Qwen 2.5 VL captioning with tuned generation settings for richer output.
+- BLIP, BLIP-2, and Qwen 2.5 VL captioning with tuned generation settings for cleaner and richer output.
+- `Caption Level` options (`All`, `Brief`, `Detailed`, `Highly Detailed`) selectable from a dropdown.
+- Structured `Highly Detailed` caption format with `Short Summary` and `Highly Detailed Description` sections.
+- Post-processing cleanup to remove repeated fragments and truncated ending artifacts.
+- A second-pass refinement step to reduce obvious child/animal confusion in captions.
 - Docker support for containerized execution.
 - Terraform infrastructure for Azure Container Apps deployment.
 
@@ -18,33 +22,34 @@ The app defaults to `Salesforce/blip-image-captioning-base` (lower memory) and c
 3. Caption generation with beam search and length controls.
 4. Text decoding and display in the Gradio UI.
 
-Current default generation configuration in `main.py`:
-- Prompt: `"a detailed description of"`
+Current default generation base configuration in `main.py`:
 - `max_new_tokens=48`
 - `min_new_tokens=10`
 - `num_beams=3`
 - `repetition_penalty=1.15`
 - `no_repeat_ngram_size=3`
 
-The web UI accepts an uploaded image and returns the selected caption output in a single result panel on the right-hand side. You can choose `All`, `Brief`, `Detailed`, or `Highly Detailed` before generating.
+The web UI accepts an uploaded image and returns the selected caption output in a single result panel on the right-hand side. You can choose `All`, `Brief`, `Detailed`, or `Highly Detailed` from the `Caption Level` dropdown before generating.
 
 Caption rules:
 
 - Brief caption: one very short sentence focused only on the main subject.
 - Detailed caption: 1-2 sentences with subject, basic attributes, and setting.
-- Highly detailed caption: 2-3 sentences in a storyteller style with rich scene detail, lighting, mood, environment, and action, while avoiding repeated words or phrases.
+- Highly Detailed caption: a two-part structured format:
+  - `Short Summary` (1-2 sentences)
+  - `Highly Detailed Description` (full scene breakdown)
 
 Example output style:
 
 - Brief: `A dog runs freely.`
 - Detailed: `A cheerful brown dog runs across a sunny park, enjoying the open grassy space.`
-- Highly detailed: `A lively brown dog dashes across a vibrant green park, its paws barely touching the ground as sunlight filters through the trees. The gentle breeze moves the leaves, and the open space feels bright, fresh, and full of energy. The moment unfolds like a small scene from a story, filled with movement, freedom, and joy.`
+- Highly Detailed: `A lively brown dog dashes across a vibrant green park, its paws barely touching the ground as sunlight filters through the trees. The gentle breeze moves the leaves, and the open space feels bright, fresh, and full of energy. The moment unfolds like a small scene from a story, filled with movement, freedom, and joy.`
 
-`Detailed` is tuned to return faster than `Highly Detailed` by using a smaller token budget and fewer beams.
+`Detailed` is tuned for a clean, human-readable caption, while `Highly Detailed` is tuned for structured, richer scene analysis.
 
 ## Tech Stack
 
-- Python 3.14 (local venv currently used)
+- Python 3.11+
 - Gradio 6.12.0
 - PyTorch 2.11.0
 - Transformers 5.5.3
@@ -68,18 +73,18 @@ Example output style:
 
 ## Local Development Setup
 
-## Prerequisites
+### Prerequisites
 
 - Windows PowerShell
 - Python installed
 - Virtual environment created at `.venv`
 
-## Install Dependencies
+### Install Dependencies
 
 Use the venv interpreter directly (works even if PowerShell activation policy blocks scripts):
 
 ```powershell
-c:/Users/abdua/Desktop/AM/AI/Image-Captioning-AI/.venv/Scripts/python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 Optional activation approach:
@@ -95,24 +100,27 @@ If activation is blocked by execution policy:
 Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 ```
 
-## Run the App
+### Run the App
 
 ```powershell
-c:/Users/abdua/Desktop/AM/AI/Image-Captioning-AI/.venv/Scripts/python.exe main.py
+.\.venv\Scripts\python.exe main.py
 ```
+
+By default, the app runs on:
+- `http://127.0.0.1:10000`
 
 Use a fine-tuned checkpoint (local path or Hugging Face model ID):
 
 ```powershell
 $env:FINETUNED_MODEL_PATH="your-org/your-finetuned-blip-model"
-c:/Users/abdua/Desktop/AM/AI/Image-Captioning-AI/.venv/Scripts/python.exe main.py
+.\.venv\Scripts\python.exe main.py
 ```
 
 Use Qwen 2.5 VL:
 
 ```powershell
 $env:MODEL_ID="Qwen/Qwen2.5-VL-3B-Instruct"
-c:/Users/abdua/Desktop/AM/AI/Image-Captioning-AI/.venv/Scripts/python.exe main.py
+.\.venv\Scripts\python.exe main.py
 ```
 
 Notes for Qwen 2.5 VL:
@@ -124,7 +132,7 @@ Use BLIP-2:
 
 ```powershell
 $env:MODEL_ID="Salesforce/blip2-opt-2.7b"
-c:/Users/abdua/Desktop/AM/AI/Image-Captioning-AI/.venv/Scripts/python.exe main.py
+.\.venv\Scripts\python.exe main.py
 ```
 
 Notes for BLIP-2:
@@ -135,11 +143,9 @@ Notes for BLIP-2:
 ## Render Deployment Notes
 
 - Render instances are CPU-bound, so Qwen 2.5 VL and BLIP-2 are usually not practical defaults there.
-- The Docker image now prefetches the configured base model or fine-tuned checkpoint during build so first-request latency is much lower after deployment.
-- The Render container now disables startup preload and limits PyTorch and OpenMP threads to reduce memory pressure.
-- Render defaults also reduce beam count and token budgets on CPU to avoid slowdowns from memory contention.
-- If you want the smallest cold-start cost on Render, keep `MODEL_ID` set to the default BLIP model.
-- Fine-tuning by itself does not reduce inference memory. To lower Render memory usage, fine-tune a small base model such as `Salesforce/blip-image-captioning-base` and deploy that checkpoint instead of switching to BLIP-2 or Qwen.
+- The Docker image prefetches the configured base model or fine-tuned checkpoint during build to reduce first-request latency.
+- Render defaults limit preload, threads, and generation settings to reduce memory pressure on CPU.
+- For lowest memory usage, keep `MODEL_ID=Salesforce/blip-image-captioning-base` and prefer a fine-tuned BLIP base checkpoint.
 
 Recommended low-memory Render setup:
 
@@ -148,6 +154,24 @@ Recommended low-memory Render setup:
 - Keep `RENDER_OPTIMIZED=true`
 - Keep `PRELOAD_MODEL_ON_STARTUP=false`
 - Avoid BLIP-2 and Qwen on small Render instances
+- Keep thread env vars at `1` (`TORCH_NUM_THREADS`, `OMP_NUM_THREADS`, `MKL_NUM_THREADS`)
+
+### Render 512 MiB Survival Settings
+
+If your Render service is capped at `512 MiB`, keep the deployment conservative:
+
+- Use `MODEL_ID=Salesforce/blip-image-captioning-base`
+- If you fine-tune, fine-tune that BLIP base model and deploy the fine-tuned checkpoint instead of switching to a larger architecture
+- Keep `PRELOAD_MODEL_ON_STARTUP=false` so the model is not loaded during container boot
+- Keep `CPU_QUANTIZE=true`
+- Keep `TORCH_NUM_THREADS=1`, `OMP_NUM_THREADS=1`, and `MKL_NUM_THREADS=1`
+- Reduce generation cost with `CAPTION_MAX_NEW_TOKENS=32-40` and `CAPTION_NUM_BEAMS=1-2`
+
+Notes:
+
+- The `UNEXPECTED ... position_ids` log line from Transformers is benign and is not the cause of the memory issue
+- Fine-tuning does not materially reduce inference memory on its own; model size and startup behavior are the main levers
+- If the service still OOMs, move to a larger Render instance before trying BLIP-2 or Qwen
 
 If you have a fine-tuned Hugging Face checkpoint, set Render environment variables like this:
 
@@ -173,7 +197,7 @@ docker build `
 
 Use a Hugging Face model ID for Render. A local fine-tuned path will not exist inside the deployed container unless you explicitly copy that checkpoint into the image.
 
-Optional memory-related tuning:
+Optional generation tuning:
 
 ```powershell
 $env:MODEL_ID="Salesforce/blip-image-captioning-base"
@@ -184,11 +208,10 @@ $env:CAPTION_NO_REPEAT_NGRAM_SIZE="3"
 ```
 
 Then open:
-- `http://127.0.0.1:7860`
+- `http://127.0.0.1:10000`
 
 Notes:
 - First run downloads the configured model/checkpoint, so startup can take time.
-- The app uses `share=True`, so Gradio may also generate a public share link.
 
 ## Docker
 
@@ -201,7 +224,7 @@ docker build -t image-captioning-ai:latest .
 Run container:
 
 ```powershell
-docker run --rm -p 7860:7860 image-captioning-ai:latest
+docker run --rm -e PORT=7860 -p 7860:7860 image-captioning-ai:latest
 ```
 
 Open:

@@ -64,7 +64,7 @@ DEFAULT_DETAIL_LEVEL = os.environ.get("CAPTION_DETAIL_LEVEL", "Detailed").title(
 NO_REPEAT_NGRAM_SIZE = _get_int_env("CAPTION_NO_REPEAT_NGRAM_SIZE", 3)
 PRELOAD_MODEL_ON_STARTUP = os.environ.get(
     "PRELOAD_MODEL_ON_STARTUP",
-    "true" if RENDER_OPTIMIZED else "true",
+    "false" if RENDER_OPTIMIZED else "true",
 ).lower() == "true"
 
 DEVICE = "cuda" if HAS_CUDA else "cpu"
