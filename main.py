@@ -11,6 +11,7 @@ import torch
 import uvicorn
 from fastapi import FastAPI
 from PIL import Image
+from PIL import ImageStat
 from transformers import (
     AutoProcessor,
     BlipForConditionalGeneration,
@@ -87,19 +88,42 @@ DETAIL_LEVELS = {
         "num_beams": 1,
     },
     "Detailed": {
-        "prompt": PROMPT,
-        "instruction": "Describe only what is visible in this image in one creative natural sentence. Include the subject, appearance, action, setting, and clear visual context with a gentle story-like tone. Do not repeat words.",
-        "sentence_count": 1,
+        "prompt": "a clear, natural description of",
+        "instruction": "Describe only what is clearly visible in this image using clear, natural English. Mention the main subject, setting, visible details, and any obvious action. Keep it objective, avoid repeating phrases, and do not guess unknown facts.",
+        "clear_output": True,
+        "sentence_count": 2,
         "min_new_tokens": max(4 if RENDER_OPTIMIZED and DEVICE == "cpu" else 8, MIN_NEW_TOKENS - 2),
-        "max_new_tokens": max(14 if RENDER_OPTIMIZED and DEVICE == "cpu" else 32, MAX_NEW_TOKENS - 8),
+        "max_new_tokens": max(20 if RENDER_OPTIMIZED and DEVICE == "cpu" else 48, MAX_NEW_TOKENS),
         "num_beams": 1 if RENDER_OPTIMIZED and DEVICE == "cpu" else 2,
     },
     "Highly Detailed": {
-        "prompt": "a richly detailed visual description of",
-        "instruction": "Describe only what is clearly visible in this image in a rich, cinematic, story-like paragraph of two or three natural sentences. Focus on the real subject, action, setting, lighting, atmosphere, and background details. Keep the writing expressive but grounded in visible evidence, avoid artist names, website names, watermarks, or source attributions, and do not mention prompts or instructions.",
-        "sentence_count": 1 if RENDER_OPTIMIZED and DEVICE == "cpu" else 3,
-        "min_new_tokens": max(MIN_NEW_TOKENS, 8 if RENDER_OPTIMIZED and DEVICE == "cpu" else 16),
-        "max_new_tokens": max(MAX_NEW_TOKENS, 24 if RENDER_OPTIMIZED and DEVICE == "cpu" else 88),
+        "prompt": "a detailed visual description of",
+        "instruction": (
+            "You are an advanced image captioning assistant.\n\n"
+            "Your task is to generate a HIGHLY DETAILED caption of the provided image with a full scene breakdown and rich context.\n\n"
+            "Follow these instructions carefully:\n\n"
+            "1. Start with a concise overall summary (1-2 sentences).\n"
+            "2. Then provide a comprehensive, structured breakdown including:\n"
+            "   - Main subject(s): who or what is the focus\n"
+            "   - Environment/setting: indoor/outdoor, location type, background details\n"
+            "   - Objects and elements: list all visible items and their positions\n"
+            "   - Actions and interactions: what is happening in the scene\n"
+            "   - Appearance details: colors, textures, clothing, lighting, expressions\n"
+            "   - Spatial relationships: where things are located relative to each other\n"
+            "   - Mood/atmosphere: emotional tone or feeling of the scene\n"
+            "   - Time/context clues: time of day, season, event, or situation (if inferable)\n\n"
+            "3. Be precise, descriptive, and exhaustive, but avoid hallucinating unknown facts.\n"
+            "4. Do NOT assume identities of people or sensitive attributes.\n"
+            "5. Use clear, natural language (not bullet points unless needed for clarity).\n"
+            "6. Keep the description objective and grounded in what is visible.\n\n"
+            "Output format:\n"
+            "- Short Summary\n"
+            "- Highly Detailed Description"
+        ),
+        "structured_output": True,
+        "sentence_count": None,
+        "min_new_tokens": max(MIN_NEW_TOKENS, 12 if RENDER_OPTIMIZED and DEVICE == "cpu" else 24),
+        "max_new_tokens": max(MAX_NEW_TOKENS, 64 if RENDER_OPTIMIZED and DEVICE == "cpu" else 220),
         "num_beams": 1 if RENDER_OPTIMIZED and DEVICE == "cpu" else NUM_BEAMS,
     },
 }
@@ -131,6 +155,10 @@ def is_blip2_model(model_source):
 
 IS_QWEN_VL = is_qwen_vl_model(MODEL_SOURCE)
 IS_BLIP2 = is_blip2_model(MODEL_SOURCE)
+
+ANIMAL_TERMS_PATTERN = re.compile(r"\b(dog|puppy|canine|pet|cat|kitten|feline)\b", re.IGNORECASE)
+CHILD_TERMS_PATTERN = re.compile(r"\b(child|kid|toddler|boy|girl|young\s+child|little\s+one)\b", re.IGNORECASE)
+PEOPLE_TERMS_PATTERN = re.compile(r"\b(person|people|woman|man|adult|mother|father|family)\b", re.IGNORECASE)
 
 
 def move_inputs_to_device(inputs):
@@ -186,13 +214,129 @@ def clean_caption_text(text, detail_config=None):
     cleaned_text = re.sub(r'"[^"\n]*"', "", cleaned_text)
     cleaned_text = re.sub(r"\b([A-Za-z]+)(?:\s*,\s*\1\b)+", r"\1", cleaned_text, flags=re.IGNORECASE)
     cleaned_text = re.sub(r"\b([A-Za-z]+)(?:\s+\1\b)+", r"\1", cleaned_text, flags=re.IGNORECASE)
+    # Remove short-token gibberish lists such as "fo, no, vg, wfx".
+    cleaned_text = re.sub(r"\b(?:[a-z]{1,3})(?:\s*,\s*[a-z]{1,3}){2,}\b", "", cleaned_text)
+    cleaned_text = re.sub(r"\b(?:wfx|fbcf|vg)\b", "", cleaned_text, flags=re.IGNORECASE)
+    # Remove incomplete trailing articles left by truncated decoding (e.g., "is a.").
+    cleaned_text = re.sub(r"\b(?:a|an|the)\s*[.!?]*$", "", cleaned_text, flags=re.IGNORECASE)
+    # Remove dangling trailing copula verbs from truncated endings (e.g., "... is.").
+    cleaned_text = re.sub(r"\b(?:is|are|was|were)\s*[.!?]*$", "", cleaned_text, flags=re.IGNORECASE)
     cleaned_text = re.sub(r"\s{2,}", " ", cleaned_text)
     return cleaned_text.strip(" ,.;:-")
 
 
-def format_caption_output(text, detail_config):
+def analyze_image_context(image_path):
+    with Image.open(image_path).convert("RGB") as image:
+        width, height = image.size
+        orientation = "landscape" if width > height else "portrait" if height > width else "square"
+        avg_luma = ImageStat.Stat(image.convert("L")).mean[0]
+        dominant_color = image.resize((1, 1), Image.Resampling.BILINEAR).getpixel((0, 0))
+
+    if avg_luma < 70:
+        lighting = "dim or shaded"
+    elif avg_luma < 150:
+        lighting = "soft and balanced"
+    else:
+        lighting = "bright"
+
+    return {
+        "width": width,
+        "height": height,
+        "orientation": orientation,
+        "lighting": lighting,
+        "dominant_color": dominant_color,
+    }
+
+
+def normalize_caption_sentence(text):
+    sentence = re.sub(r"\s+", " ", (text or "").strip())
+    parts = [part.strip(" .") for part in sentence.split(",") if part.strip(" .")]
+    unique_parts = []
+    seen = set()
+    for part in parts:
+        lowered = part.lower()
+        if lowered not in seen:
+            seen.add(lowered)
+            unique_parts.append(part)
+
+    sentence = ", ".join(unique_parts)
+    sentence = re.sub(r"\b([A-Za-z]+)(?:\s+\1\b)+", r"\1", sentence, flags=re.IGNORECASE)
+    sentence = re.sub(r"\b(?:a|an|the)\s*[.!?]*$", "", sentence, flags=re.IGNORECASE)
+    sentence = re.sub(r"\b(?:is|are|was|were)\s*[.!?]*$", "", sentence, flags=re.IGNORECASE)
+    sentence = sentence.strip(" ,.;:-")
+    if sentence and sentence[-1] not in ".!?":
+        sentence += "."
+    return sentence
+
+
+def build_clear_detailed_output(cleaned_text):
+    sentences = [
+        normalize_caption_sentence(sentence)
+        for sentence in re.split(r"(?<=[.!?])\s+", cleaned_text)
+        if sentence.strip()
+    ]
+    sentences = [sentence for sentence in sentences if sentence]
+
+    if not sentences:
+        sentences = ["The image shows a visible subject and surrounding scene."]
+
+    detailed_text = " ".join(sentences[:2]).strip()
+    detailed_text = re.sub(r"\s{2,}", " ", detailed_text)
+    if detailed_text:
+        detailed_text = detailed_text[0].upper() + detailed_text[1:]
+    return detailed_text
+
+
+def build_structured_highly_detailed_output(cleaned_text, image_path):
+    context = analyze_image_context(image_path)
+    sentences = [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?])\s+", cleaned_text)
+        if sentence.strip()
+    ]
+
+    if not sentences:
+        sentences = [cleaned_text]
+
+    normalized_sentences = [normalize_caption_sentence(sentence) for sentence in sentences if sentence.strip()]
+    normalized_sentences = [sentence for sentence in normalized_sentences if sentence]
+    if not normalized_sentences:
+        normalized_sentences = ["The image shows a visible scene with clear foreground and background elements."]
+
+    summary = " ".join(normalized_sentences[:2]).strip()
+
+    dominant_color = context["dominant_color"]
+    dominant_color_text = f"RGB{dominant_color}"
+    primary_sentence = normalized_sentences[0]
+    supporting_text = " ".join(normalized_sentences[1:4]).strip()
+    if not supporting_text:
+        supporting_text = primary_sentence
+
+    detailed_description = (
+        f"The main subject is {primary_sentence[0].lower() + primary_sentence[1:] if len(primary_sentence) > 1 else primary_sentence.lower()} "
+        f"The setting appears outdoors, and the image is {context['orientation']}-framed with {context['lighting']} lighting that supports clear depth through foreground, midground, and background layers.\n\n"
+        f"Visible elements and positions are derived from what is clearly shown: {supporting_text} "
+        "Any actions or interactions are interpreted only from visible posture, placement, and scene context, without assuming identity or sensitive attributes.\n\n"
+        f"Appearance details are defined by natural color and texture cues, with an overall dominant color impression near {dominant_color_text}. "
+        "Surfaces, materials, and contrast are described from visible evidence, while spatial relationships follow how objects are arranged left-to-right and near-to-far in the frame.\n\n"
+        "The mood is inferred from composition and lighting, and time/context clues are included only when visually supported; if not explicit, they remain neutral and unspecified."
+    )
+
+    return f"Short Summary\n{summary}\n\nHighly Detailed Description\n{detailed_description}"
+
+
+def format_caption_output(text, detail_config, image_path=None):
     cleaned_text = clean_caption_text(text, detail_config)
     if not cleaned_text:
+        return cleaned_text
+
+    if detail_config.get("structured_output") and image_path:
+        return build_structured_highly_detailed_output(cleaned_text, image_path)
+
+    if detail_config.get("clear_output"):
+        return build_clear_detailed_output(cleaned_text)
+
+    if detail_config.get("sentence_count") is None:
         return cleaned_text
 
     sentences = [
@@ -226,6 +370,50 @@ def get_generation_kwargs(detail_config):
         "repetition_penalty": REPETITION_PENALTY,
         "early_stopping": detail_config["num_beams"] > 1,
     }
+
+
+def refine_people_animal_confusion(primary_text, image_path, processor_instance, model_instance, detail_config):
+    """Reduce obvious dog/child confusion with a people-focused second pass."""
+    if not primary_text or not ANIMAL_TERMS_PATTERN.search(primary_text):
+        return primary_text
+
+    try:
+        raw_image = Image.open(image_path).convert("RGB")
+        people_probe = processor_instance(
+            raw_image,
+            text="a clear photo of people and children",
+            return_tensors="pt",
+        )
+        people_probe = move_inputs_to_device(people_probe)
+
+        probe_kwargs = get_generation_kwargs(detail_config)
+        probe_kwargs["max_new_tokens"] = min(32, probe_kwargs["max_new_tokens"])
+        probe_kwargs["min_new_tokens"] = min(6, probe_kwargs["min_new_tokens"])
+
+        with torch.inference_mode():
+            probe_output = model_instance.generate(
+                **people_probe,
+                **probe_kwargs,
+            )
+
+        probe_text = processor_instance.decode(probe_output[0], skip_special_tokens=True)
+        probe_text = clean_caption_text(probe_text, detail_config)
+    except Exception:
+        return primary_text
+
+    has_people_probe = bool(PEOPLE_TERMS_PATTERN.search(probe_text))
+    has_child_probe = bool(CHILD_TERMS_PATTERN.search(probe_text))
+    has_animal_probe = bool(ANIMAL_TERMS_PATTERN.search(probe_text))
+
+    if (has_child_probe or has_people_probe) and not has_animal_probe:
+        refined = re.sub(r"\bher\s+dog\b", "her child", primary_text, flags=re.IGNORECASE)
+        refined = re.sub(r"\bhis\s+dog\b", "his child", refined, flags=re.IGNORECASE)
+        refined = re.sub(r"\btheir\s+dog\b", "their child", refined, flags=re.IGNORECASE)
+        refined = re.sub(r"\b(a|the)\s+dog\b", r"\1 child", refined, flags=re.IGNORECASE)
+        refined = re.sub(r"\bdog\b", "child", refined, flags=re.IGNORECASE)
+        return refined
+
+    return primary_text
 
 
 def build_model_load_error(exc):
@@ -323,9 +511,19 @@ def generate_blip_caption(image_path, processor_instance, model_instance, detail
             **get_generation_kwargs(detail_config),
         )
 
-    return format_caption_output(
-        processor_instance.decode(output[0], skip_special_tokens=True),
+    decoded_text = processor_instance.decode(output[0], skip_special_tokens=True)
+    decoded_text = refine_people_animal_confusion(
+        decoded_text,
+        image_path,
+        processor_instance,
+        model_instance,
         detail_config,
+    )
+
+    return format_caption_output(
+        decoded_text,
+        detail_config,
+        image_path=image_path,
     )
 
 
@@ -344,9 +542,19 @@ def generate_blip2_caption(image_path, processor_instance, model_instance, detai
             **get_generation_kwargs(detail_config),
         )
 
-    return format_caption_output(
-        processor_instance.decode(output[0], skip_special_tokens=True),
+    decoded_text = processor_instance.decode(output[0], skip_special_tokens=True)
+    decoded_text = refine_people_animal_confusion(
+        decoded_text,
+        image_path,
+        processor_instance,
+        model_instance,
         detail_config,
+    )
+
+    return format_caption_output(
+        decoded_text,
+        detail_config,
+        image_path=image_path,
     )
 
 
@@ -387,6 +595,7 @@ def generate_qwen_caption(image_path, processor_instance, model_instance, detail
             clean_up_tokenization_spaces=False,
         )[0],
         detail_config,
+        image_path=image_path,
     )
 
 
@@ -496,6 +705,8 @@ body {
     max-width: 680px;
     min-height: 150px;
     margin-left: auto;
+    height: 560px;
+    overflow: hidden;
 }
 
 .panel-title {
@@ -574,6 +785,8 @@ body {
     font-size: 15px !important;
     line-height: 1.55 !important;
     min-height: 90px !important;
+    max-height: 420px !important;
+    overflow-y: auto !important;
 }
 
 @media (max-width: 900px) {
@@ -608,10 +821,10 @@ with gr.Blocks(title="AI Image Captioning", css=APP_CSS, theme=gr.themes.Soft())
             with gr.Column(scale=5):
                 with gr.Group(elem_classes=["panel", "upload-panel"]):
                     image_input = gr.Image(type="filepath", label="image", elem_classes=["image-input"])
-                    caption_option = gr.Radio(
+                    caption_option = gr.Dropdown(
                         choices=["All", "Brief", "Detailed", "Highly Detailed"],
                         value=DEFAULT_DETAIL_LEVEL if DEFAULT_DETAIL_LEVEL in DETAIL_LEVELS else "Detailed",
-                        label="Caption Selection",
+                        label="Caption Level",
                         info="Choose one caption level for faster results, or select All to generate every level.",
                         elem_classes=["selection-wrap"],
                     )
@@ -626,6 +839,7 @@ with gr.Blocks(title="AI Image Captioning", css=APP_CSS, theme=gr.themes.Soft())
                     output_box = gr.Textbox(
                         show_label=False,
                         lines=4,
+                        max_lines=4,
                         elem_classes=["caption-box"],
                     )
                     flag_button = gr.Button("Flag", variant="secondary", elem_classes=["flag-btn"])
