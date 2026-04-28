@@ -29,6 +29,10 @@ RENDER_OPTIMIZED = os.environ.get(
     "RENDER_OPTIMIZED",
     "true" if IS_RENDER else "false",
 ).lower() == "true"
+LOW_LATENCY_MODE = os.environ.get(
+    "LOW_LATENCY_MODE",
+    "true" if not HAS_CUDA else "false",
+).lower() == "true"
 
 
 def _get_int_env(name, default):
@@ -66,6 +70,10 @@ PRELOAD_MODEL_ON_STARTUP = os.environ.get(
     "PRELOAD_MODEL_ON_STARTUP",
     "false" if RENDER_OPTIMIZED else "true",
 ).lower() == "true"
+ENABLE_PEOPLE_REFINEMENT = os.environ.get(
+    "ENABLE_PEOPLE_REFINEMENT",
+    "false" if LOW_LATENCY_MODE else "true",
+).lower() == "true"
 
 DEVICE = "cuda" if HAS_CUDA else "cpu"
 DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
@@ -84,7 +92,7 @@ DETAIL_LEVELS = {
         "instruction": "Describe only what is visible in this image in one short creative natural sentence. Keep it simple, vivid, image-based, and story-like. Do not repeat words.",
         "sentence_count": 1,
         "min_new_tokens": max(4, MIN_NEW_TOKENS // 2),
-        "max_new_tokens": max(12, MAX_NEW_TOKENS // 2),
+        "max_new_tokens": 10 if LOW_LATENCY_MODE else max(12, MAX_NEW_TOKENS // 2),
         "num_beams": 1,
     },
     "Detailed": {
@@ -92,9 +100,9 @@ DETAIL_LEVELS = {
         "instruction": "Describe only what is clearly visible in this image using clear, natural English. Mention the main subject, setting, visible details, and any obvious action. Keep it objective, avoid repeating phrases, and do not guess unknown facts.",
         "clear_output": True,
         "sentence_count": 2,
-        "min_new_tokens": max(4 if RENDER_OPTIMIZED and DEVICE == "cpu" else 8, MIN_NEW_TOKENS - 2),
-        "max_new_tokens": max(20 if RENDER_OPTIMIZED and DEVICE == "cpu" else 48, MAX_NEW_TOKENS),
-        "num_beams": 1 if RENDER_OPTIMIZED and DEVICE == "cpu" else 2,
+        "min_new_tokens": 4 if LOW_LATENCY_MODE else max(4 if RENDER_OPTIMIZED and DEVICE == "cpu" else 8, MIN_NEW_TOKENS - 2),
+        "max_new_tokens": 16 if LOW_LATENCY_MODE else max(20 if RENDER_OPTIMIZED and DEVICE == "cpu" else 48, MAX_NEW_TOKENS),
+        "num_beams": 1 if LOW_LATENCY_MODE or (RENDER_OPTIMIZED and DEVICE == "cpu") else 2,
     },
     "Highly Detailed": {
         "prompt": "a detailed visual description of",
@@ -122,9 +130,9 @@ DETAIL_LEVELS = {
         ),
         "structured_output": True,
         "sentence_count": None,
-        "min_new_tokens": max(MIN_NEW_TOKENS, 12 if RENDER_OPTIMIZED and DEVICE == "cpu" else 24),
-        "max_new_tokens": max(MAX_NEW_TOKENS, 64 if RENDER_OPTIMIZED and DEVICE == "cpu" else 220),
-        "num_beams": 1 if RENDER_OPTIMIZED and DEVICE == "cpu" else NUM_BEAMS,
+        "min_new_tokens": 8 if LOW_LATENCY_MODE else max(MIN_NEW_TOKENS, 12 if RENDER_OPTIMIZED and DEVICE == "cpu" else 24),
+        "max_new_tokens": 28 if LOW_LATENCY_MODE else max(MAX_NEW_TOKENS, 64 if RENDER_OPTIMIZED and DEVICE == "cpu" else 220),
+        "num_beams": 1 if LOW_LATENCY_MODE or (RENDER_OPTIMIZED and DEVICE == "cpu") else NUM_BEAMS,
     },
 }
 
@@ -369,12 +377,13 @@ def get_generation_kwargs(detail_config):
         "no_repeat_ngram_size": NO_REPEAT_NGRAM_SIZE,
         "repetition_penalty": REPETITION_PENALTY,
         "early_stopping": detail_config["num_beams"] > 1,
+        "use_cache": True,
     }
 
 
 def refine_people_animal_confusion(primary_text, image_path, processor_instance, model_instance, detail_config):
     """Reduce obvious dog/child confusion with a people-focused second pass."""
-    if not primary_text or not ANIMAL_TERMS_PATTERN.search(primary_text):
+    if not ENABLE_PEOPLE_REFINEMENT or not primary_text or not ANIMAL_TERMS_PATTERN.search(primary_text):
         return primary_text
 
     try:
